@@ -2,18 +2,24 @@ blueprint:
   name: Global Last Brightness and Color Restore
   description: >
     Remembers the last brightness and color for every light and restores them
-    when a light is turned on without explicit values. Works for all existing
-    and future lights. Stores a JSON map in an input_text helper. Uses 200 as
-    the default brightness if nothing is saved yet.
+    when a light is turned on without explicit values. Works for all lights in
+    a group. Stores a JSON map in an input_text helper. Uses 200 as the default
+    brightness if nothing is saved yet.
   domain: automation
   source_url: https://hatstore.ai/global-last-brightness-color-restore
   input:
     storage_helper:
       name: Storage helper input_text
-      description: Select an input_text with a large max length to store the JSON map
+      description: Select an input_text to store the JSON map
       selector:
         entity:
           domain: input_text
+    lights_group:
+      name: Lights group
+      description: Select a group containing all lights you want this to track
+      selector:
+        entity:
+          domain: group
 
 mode: restart
 max_exceeded: silent
@@ -25,15 +31,16 @@ variables:
 trigger:
   - id: save_state
     platform: state
-    entity_id: group.all_lights
+    entity_id: !input lights_group
   - id: restore_on
     platform: state
-    entity_id: group.all_lights
+    entity_id: !input lights_group
 
 condition: []
 
 action:
   - choose:
+      # Save light state
       - conditions:
           - condition: trigger
             id: save_state
@@ -68,6 +75,7 @@ action:
             data:
               value: "{{ new_map }}"
 
+      # Restore light state
       - conditions:
           - condition: trigger
             id: restore_on
