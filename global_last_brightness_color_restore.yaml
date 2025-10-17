@@ -1,27 +1,14 @@
 blueprint:
-  name: Global Last Brightness and Color Restore (UI-ready)
+  name: Global Last Brightness and Color Restore (Single Helper)
   description: >
     Remembers the last brightness and color for every light and restores them
-    when a light is turned on without explicit values. Works for all current
-    and future lights. Splits JSON storage across three text helpers to avoid
-    UI character limits. Uses 200 as default brightness if nothing is saved yet.
+    when a light is turned on without explicit values. Uses one input_text helper.
+    Default brightness is 200 if nothing is saved yet.
   domain: automation
   input:
-    storage_helper_1:
-      name: Storage helper 1
-      description: First input_text helper (max 255 chars)
-      selector:
-        entity:
-          domain: input_text
-    storage_helper_2:
-      name: Storage helper 2
-      description: Second input_text helper (max 255 chars)
-      selector:
-        entity:
-          domain: input_text
-    storage_helper_3:
-      name: Storage helper 3
-      description: Third input_text helper (max 255 chars)
+    storage_helper:
+      name: Storage helper
+      description: Input_text helper to store light states (JSON)
       selector:
         entity:
           domain: input_text
@@ -30,16 +17,13 @@ mode: restart
 max_exceeded: silent
 
 variables:
-  storage_helpers: 
-    - !input storage_helper_1
-    - !input storage_helper_2
-    - !input storage_helper_3
+  storage_helper: !input storage_helper
   default_brightness: 200
 
 trigger:
   - platform: state
     entity_id: "*"
-    for: "00:00:00"   # triggers immediately
+    for: "00:00:00"
 
 condition: []
 
@@ -48,20 +32,16 @@ action:
       eid: "{{ trigger.entity_id }}"
       state_attrs: "{{ trigger.to_state.attributes }}"
       supported_modes: "{{ state_attrs.supported_color_modes | default([]) }}"
-      # Combine the three helpers into one JSON map
-      raw_data: >
-        {% set all_texts = storage_helpers | map('states') | list %}
-        {% set combined = all_texts | join('') %}
-        {{ combined | default('{}') }}
+      raw_data: "{{ states(storage_helper) | default('{}') }}"
       map_data: >
         {% set s = raw_data if raw_data not in ['unknown','unavailable'] else '{}' %}
         {{ s | from_json }}
 
-  # Save current light state if it’s a light
+  # Save current light state
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ trigger.entity_id.startswith('light.') }}"
+            value_template: "{{ eid.startswith('light.') }}"
         sequence:
           - variables:
               new_record: >
@@ -79,32 +59,17 @@ action:
                 {% set d = dict(map_data) %}
                 {% set _ = d.update({eid: new_record}) %}
                 {{ d | tojson }}
-              # split across 3 helpers
-              part_len = (updated_map | length // 3) + 1
-              part1 = updated_map[:part_len]
-              part2 = updated_map[part_len:part_len*2]
-              part3 = updated_map[part_len*2:]
           - service: input_text.set_value
             target:
-              entity_id: "{{ storage_helpers[0] }}"
+              entity_id: "{{ storage_helper }}"
             data:
-              value: "{{ part1 }}"
-          - service: input_text.set_value
-            target:
-              entity_id: "{{ storage_helpers[1] }}"
-            data:
-              value: "{{ part2 }}"
-          - service: input_text.set_value
-            target:
-              entity_id: "{{ storage_helpers[2] }}"
-            data:
-              value: "{{ part3 }}"
+              value: "{{ updated_map }}"
 
   # Restore brightness/color when light is turned on without values
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ trigger.entity_id.startswith('light.') }}"
+            value_template: "{{ eid.startswith('light.') }}"
           - condition: template
             value_template: "{{ state_attrs.brightness in [None,0] }}"
         sequence:
