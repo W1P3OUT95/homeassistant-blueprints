@@ -25,10 +25,10 @@ variables:
 trigger:
   - id: save_state
     platform: state
+    entity_id: "{{ expand('light') | map(attribute='entity_id') | list }}"
   - id: restore_on
     platform: state
-    from: "off"
-    to: "on"
+    entity_id: "{{ expand('light') | map(attribute='entity_id') | list }}"
 
 condition: []
 
