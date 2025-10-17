@@ -1,9 +1,9 @@
 blueprint:
-  name: Global Last Brightness and Color Restore (Single Helper)
+  name: Global Last Brightness and Color Restore (Single Helper, All Lights)
   description: >
     Remembers the last brightness and color for every light and restores them
     when a light is turned on without explicit values. Uses one input_text helper.
-    Default brightness is 200 if nothing is saved yet.
+    Default brightness is 200 if nothing is saved yet. Works automatically for all lights.
   domain: automation
   input:
     storage_helper:
@@ -22,121 +22,130 @@ variables:
 
 trigger:
   - platform: state
-    entity_id: group.all_lights
+    entity_id:
+      # Trigger on all lights dynamically
+      !input storage_helper  # This will be handled in actions to expand all lights
+    # We'll actually expand all lights in actions
 
 condition: []
 
 action:
   - variables:
-      eid: "{{ trigger.entity_id }}"
-      state_attrs: "{{ trigger.to_state.attributes }}"
-      supported_modes: "{{ state_attrs.supported_color_modes | default([]) }}"
-      raw_data: "{{ states(storage_helper) | default('{}') }}"
+      # Get all lights dynamically
+      all_lights: "{{ states.light | map(attribute='entity_id') | list }}"
+      storage_data: "{{ states(storage_helper) | default('{}') }}"
       map_data: >
-        {% set s = raw_data if raw_data not in ['unknown','unavailable'] else '{}' %}
+        {% set s = storage_data if storage_data not in ['unknown','unavailable'] else '{}' %}
         {{ s | from_json }}
 
-  # Save current light state
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ eid.startswith('light.') }}"
-        sequence:
-          - variables:
-              new_record: >
-                {{
-                  {
-                    "b": state_attrs.brightness | int(0),
-                    "m": state_attrs.color_mode | default(None),
-                    "hs": state_attrs.hs_color | default(None),
-                    "rgb": state_attrs.rgb_color | default(None),
-                    "xy": state_attrs.xy_color | default(None),
-                    "ctk": state_attrs.color_temp_kelvin | default(state_attrs.color_temp | default(None))
-                  }
-                }}
-              updated_map: >
-                {% set d = dict(map_data) %}
-                {% set _ = d.update({eid: new_record}) %}
-                {{ d | tojson }}
-          - service: input_text.set_value
-            target:
-              entity_id: "{{ storage_helper }}"
-            data:
-              value: "{{ updated_map }}"
+  # Loop through all lights
+  - repeat:
+      count: "{{ all_lights | length }}"
+      sequence:
+        - variables:
+            eid: "{{ all_lights[repeat.index - 1] }}"
+            state_obj: "{{ states[eid] }}"
+            state_attrs: "{{ state_obj.attributes }}"
+            supported_modes: "{{ state_attrs.supported_color_modes | default([]) }}"
+        # Save current state
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: "{{ state_obj.state != 'unavailable' }}"
+              sequence:
+                - variables:
+                    new_record: >
+                      {{
+                        {
+                          "b": state_attrs.brightness | int(0),
+                          "m": state_attrs.color_mode | default(None),
+                          "hs": state_attrs.hs_color | default(None),
+                          "rgb": state_attrs.rgb_color | default(None),
+                          "xy": state_attrs.xy_color | default(None),
+                          "ctk": state_attrs.color_temp_kelvin | default(state_attrs.color_temp | default(None))
+                        }
+                      }}
+                    updated_map: >
+                      {% set d = dict(map_data) %}
+                      {% set _ = d.update({eid: new_record}) %}
+                      {{ d | tojson }}
+                - service: input_text.set_value
+                  target:
+                    entity_id: "{{ storage_helper }}"
+                  data:
+                    value: "{{ updated_map }}"
 
-  # Restore brightness/color when light is turned on without values
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ eid.startswith('light.') }}"
-          - condition: template
-            value_template: "{{ state_attrs.brightness in [None,0] }}"
-        sequence:
-          - variables:
-              record: "{{ map_data.get(eid, {}) }}"
-              b: "{{ record.get('b', default_brightness) | int }}"
-              mode: "{{ record.get('m') }}"
-              hs: "{{ record.get('hs') }}"
-              rgb: "{{ record.get('rgb') }}"
-              xy: "{{ record.get('xy') }}"
-              ctk: "{{ record.get('ctk') }}"
-              no_color_now: >
-                {{ not (
-                    state_attrs.hs_color or
-                    state_attrs.rgb_color or
-                    state_attrs.xy_color or
-                    state_attrs.color_temp or
-                    state_attrs.color_temp_kelvin
-                ) }}
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ no_color_now and mode == 'hs' and ('hs' in supported_modes) and hs is not none }}"
-                sequence:
-                  - service: light.turn_on
-                    target:
-                      entity_id: "{{ eid }}"
-                    data:
-                      brightness: "{{ b }}"
-                      hs_color: "{{ hs }}"
-                      transition: 0.3
-              - conditions:
-                  - condition: template
-                    value_template: "{{ no_color_now and mode == 'rgb' and ('rgb' in supported_modes) and rgb is not none }}"
-                sequence:
-                  - service: light.turn_on
-                    target:
-                      entity_id: "{{ eid }}"
-                    data:
-                      brightness: "{{ b }}"
-                      rgb_color: "{{ rgb }}"
-                      transition: 0.3
-              - conditions:
-                  - condition: template
-                    value_template: "{{ no_color_now and mode in ['xy','xy_color'] and ('xy' in supported_modes) and xy is not none }}"
-                sequence:
-                  - service: light.turn_on
-                    target:
-                      entity_id: "{{ eid }}"
-                    data:
-                      brightness: "{{ b }}"
-                      xy_color: "{{ xy }}"
-                      transition: 0.3
-              - conditions:
-                  - condition: template
-                    value_template: "{{ no_color_now and mode in ['color_temp','color_temp_kelvin'] and ('color_temp' in supported_modes or 'color_temp_kelvin' in supported_modes) and ctk is not none }}"
-                sequence:
-                  - service: light.turn_on
-                    target:
-                      entity_id: "{{ eid }}"
-                    data:
-                      brightness: "{{ b }}"
-                      color_temp_kelvin: "{{ ctk }}"
-                      transition: 0.3
-            default:
-              - service: light.turn_on
-                target:
-                  entity_id: "{{ eid }}"
-                data:
-                  brightness: "{{ b }}"
-                  transition: 0.3
+        # Restore state if brightness is None or 0
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: "{{ state_obj.state == 'on' and (state_attrs.brightness in [None,0]) }}"
+              sequence:
+                - variables:
+                    record: "{{ map_data.get(eid, {}) }}"
+                    b: "{{ record.get('b', default_brightness) | int }}"
+                    mode: "{{ record.get('m') }}"
+                    hs: "{{ record.get('hs') }}"
+                    rgb: "{{ record.get('rgb') }}"
+                    xy: "{{ record.get('xy') }}"
+                    ctk: "{{ record.get('ctk') }}"
+                    no_color_now: >
+                      {{ not (
+                          state_attrs.hs_color or
+                          state_attrs.rgb_color or
+                          state_attrs.xy_color or
+                          state_attrs.color_temp or
+                          state_attrs.color_temp_kelvin
+                      ) }}
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ no_color_now and mode == 'hs' and ('hs' in supported_modes) and hs is not none }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ eid }}"
+                          data:
+                            brightness: "{{ b }}"
+                            hs_color: "{{ hs }}"
+                            transition: 0.3
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ no_color_now and mode == 'rgb' and ('rgb' in supported_modes) and rgb is not none }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ eid }}"
+                          data:
+                            brightness: "{{ b }}"
+                            rgb_color: "{{ rgb }}"
+                            transition: 0.3
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ no_color_now and mode in ['xy','xy_color'] and ('xy' in supported_modes) and xy is not none }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ eid }}"
+                          data:
+                            brightness: "{{ b }}"
+                            xy_color: "{{ xy }}"
+                            transition: 0.3
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ no_color_now and mode in ['color_temp','color_temp_kelvin'] and ('color_temp' in supported_modes or 'color_temp_kelvin' in supported_modes) and ctk is not none }}"
+                      sequence:
+                        - service: light.turn_on
+                          target:
+                            entity_id: "{{ eid }}"
+                          data:
+                            brightness: "{{ b }}"
+                            color_temp_kelvin: "{{ ctk }}"
+                            transition: 0.3
+                  default:
+                    - service: light.turn_on
+                      target:
+                        entity_id: "{{ eid }}"
+                      data:
+                        brightness: "{{ b }}"
+                        transition: 0.3
