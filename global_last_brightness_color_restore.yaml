@@ -1,115 +1,133 @@
 blueprint:
-  name: Global Last Brightness and Color Restore
+  name: Global Last Brightness and Color Restore (UI-ready)
   description: >
     Remembers the last brightness and color for every light and restores them
-    when a light is turned on without explicit values. Works for all lights in
-    a group. Stores a JSON map in an input_text helper. Uses 200 as the default
-    brightness if nothing is saved yet.
+    when a light is turned on without explicit values. Works for all current
+    and future lights. Splits JSON storage across three text helpers to avoid
+    UI character limits. Uses 200 as default brightness if nothing is saved yet.
   domain: automation
-  source_url: https://hatstore.ai/global-last-brightness-color-restore
   input:
-    storage_helper:
-      name: Storage helper input_text
-      description: Select an input_text to store the JSON map
+    storage_helper_1:
+      name: Storage helper 1
+      description: First input_text helper (max 255 chars)
       selector:
         entity:
           domain: input_text
-    lights_group:
-      name: Lights group
-      description: Select a group containing all lights you want this to track
+    storage_helper_2:
+      name: Storage helper 2
+      description: Second input_text helper (max 255 chars)
       selector:
         entity:
-          domain: group
+          domain: input_text
+    storage_helper_3:
+      name: Storage helper 3
+      description: Third input_text helper (max 255 chars)
+      selector:
+        entity:
+          domain: input_text
 
 mode: restart
 max_exceeded: silent
 
 variables:
-  storage: !input storage_helper
+  storage_helpers: 
+    - !input storage_helper_1
+    - !input storage_helper_2
+    - !input storage_helper_3
   default_brightness: 200
 
 trigger:
-  - id: save_state
-    platform: state
-    entity_id: !input lights_group
-  - id: restore_on
-    platform: state
-    entity_id: !input lights_group
+  - platform: state
+    entity_id: "*"
+    for: "00:00:00"   # triggers immediately
 
 condition: []
 
 action:
+  - variables:
+      eid: "{{ trigger.entity_id }}"
+      state_attrs: "{{ trigger.to_state.attributes }}"
+      supported_modes: "{{ state_attrs.supported_color_modes | default([]) }}"
+      # Combine the three helpers into one JSON map
+      raw_data: >
+        {% set all_texts = storage_helpers | map('states') | list %}
+        {% set combined = all_texts | join('') %}
+        {{ combined | default('{}') }}
+      map_data: >
+        {% set s = raw_data if raw_data not in ['unknown','unavailable'] else '{}' %}
+        {{ s | from_json }}
+
+  # Save current light state if it’s a light
   - choose:
-      # Save light state
       - conditions:
-          - condition: trigger
-            id: save_state
           - condition: template
             value_template: "{{ trigger.entity_id.startswith('light.') }}"
         sequence:
           - variables:
-              eid: "{{ trigger.entity_id }}"
-              at: "{{ trigger.to_state.attributes }}"
-              rec: >
+              new_record: >
                 {{
                   {
-                    "b": at.brightness | int(0),
-                    "m": at.color_mode | default(None),
-                    "hs": at.hs_color | default(None),
-                    "rgb": at.rgb_color | default(None),
-                    "xy": at.xy_color | default(None),
-                    "ctk": at.color_temp_kelvin | default(at.color_temp | default(None))
+                    "b": state_attrs.brightness | int(0),
+                    "m": state_attrs.color_mode | default(None),
+                    "hs": state_attrs.hs_color | default(None),
+                    "rgb": state_attrs.rgb_color | default(None),
+                    "xy": state_attrs.xy_color | default(None),
+                    "ctk": state_attrs.color_temp_kelvin | default(state_attrs.color_temp | default(None))
                   }
                 }}
-              raw: "{{ states(storage) | default('{}') }}"
-              m: >
-                {% set s = raw if raw and raw not in ['unknown', 'unavailable'] else '{}' %}
-                {{ s | from_json }}
-              new_map: >
-                {% set ns = dict(m) %}
-                {% set _ = ns.update({eid: rec}) %}
-                {{ ns | tojson }}
+              updated_map: >
+                {% set d = dict(map_data) %}
+                {% set _ = d.update({eid: new_record}) %}
+                {{ d | tojson }}
+              # split across 3 helpers
+              part_len = (updated_map | length // 3) + 1
+              part1 = updated_map[:part_len]
+              part2 = updated_map[part_len:part_len*2]
+              part3 = updated_map[part_len*2:]
           - service: input_text.set_value
             target:
-              entity_id: "{{ storage }}"
+              entity_id: "{{ storage_helpers[0] }}"
             data:
-              value: "{{ new_map }}"
+              value: "{{ part1 }}"
+          - service: input_text.set_value
+            target:
+              entity_id: "{{ storage_helpers[1] }}"
+            data:
+              value: "{{ part2 }}"
+          - service: input_text.set_value
+            target:
+              entity_id: "{{ storage_helpers[2] }}"
+            data:
+              value: "{{ part3 }}"
 
-      # Restore light state
+  # Restore brightness/color when light is turned on without values
+  - choose:
       - conditions:
-          - condition: trigger
-            id: restore_on
           - condition: template
             value_template: "{{ trigger.entity_id.startswith('light.') }}"
           - condition: template
-            value_template: "{{ trigger.to_state.attributes.brightness in [None, 0] }}"
+            value_template: "{{ state_attrs.brightness in [None,0] }}"
         sequence:
           - variables:
-              eid: "{{ trigger.entity_id }}"
-              raw: "{{ states(storage) | default('{}') }}"
-              m: >
-                {% set s = raw if raw and raw not in ['unknown', 'unavailable'] else '{}' %}
-                {{ s | from_json }}
-              rec: "{{ m.get(eid, {}) }}"
-              b: "{{ rec.get('b', default_brightness) | int }}"
-              mode: "{{ rec.get('m') }}"
-              hs: "{{ rec.get('hs') }}"
-              rgb: "{{ rec.get('rgb') }}"
-              xy: "{{ rec.get('xy') }}"
-              ctk: "{{ rec.get('ctk') }}"
-              sup: "{{ trigger.to_state.attributes.supported_color_modes | default([]) }}"
+              record: "{{ map_data.get(eid, {}) }}"
+              b: "{{ record.get('b', default_brightness) | int }}"
+              mode: "{{ record.get('m') }}"
+              hs: "{{ record.get('hs') }}"
+              rgb: "{{ record.get('rgb') }}"
+              xy: "{{ record.get('xy') }}"
+              ctk: "{{ record.get('ctk') }}"
               no_color_now: >
                 {{ not (
-                    trigger.to_state.attributes.hs_color or
-                    trigger.to_state.attributes.rgb_color or
-                    trigger.to_state.attributes.xy_color or
-                    trigger.to_state.attributes.color_temp or
-                    trigger.to_state.attributes.color_temp_kelvin
+                    state_attrs.hs_color or
+                    state_attrs.rgb_color or
+                    state_attrs.xy_color or
+                    state_attrs.color_temp or
+                    state_attrs.color_temp_kelvin
                 ) }}
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ no_color_now and mode == 'hs' and ('hs' in sup) and hs is not none }}"
+                    value_template: "{{ no_color_now and mode == 'hs' and ('hs' in supported_modes) and hs is not none }}"
                 sequence:
                   - service: light.turn_on
                     target:
@@ -118,10 +136,9 @@ action:
                       brightness: "{{ b }}"
                       hs_color: "{{ hs }}"
                       transition: 0.3
-
               - conditions:
                   - condition: template
-                    value_template: "{{ no_color_now and mode == 'rgb' and ('rgb' in sup) and rgb is not none }}"
+                    value_template: "{{ no_color_now and mode == 'rgb' and ('rgb' in supported_modes) and rgb is not none }}"
                 sequence:
                   - service: light.turn_on
                     target:
@@ -130,10 +147,9 @@ action:
                       brightness: "{{ b }}"
                       rgb_color: "{{ rgb }}"
                       transition: 0.3
-
               - conditions:
                   - condition: template
-                    value_template: "{{ no_color_now and mode in ['xy','xy_color'] and ('xy' in sup) and xy is not none }}"
+                    value_template: "{{ no_color_now and mode in ['xy','xy_color'] and ('xy' in supported_modes) and xy is not none }}"
                 sequence:
                   - service: light.turn_on
                     target:
@@ -142,10 +158,9 @@ action:
                       brightness: "{{ b }}"
                       xy_color: "{{ xy }}"
                       transition: 0.3
-
               - conditions:
                   - condition: template
-                    value_template: "{{ no_color_now and mode in ['color_temp','color_temp_kelvin'] and ('color_temp' in sup or 'color_temp_kelvin' in sup) and ctk is not none }}"
+                    value_template: "{{ no_color_now and mode in ['color_temp','color_temp_kelvin'] and ('color_temp' in supported_modes or 'color_temp_kelvin' in supported_modes) and ctk is not none }}"
                 sequence:
                   - service: light.turn_on
                     target:
@@ -154,7 +169,6 @@ action:
                       brightness: "{{ b }}"
                       color_temp_kelvin: "{{ ctk }}"
                       transition: 0.3
-
             default:
               - service: light.turn_on
                 target:
