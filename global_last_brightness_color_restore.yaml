@@ -22,8 +22,8 @@ variables:
 
 trigger:
   - platform: state
-    entity_id: "*"
-    for: "00:00:00"
+    entity_id:
+      - light.alllights
 
 condition: []
 
