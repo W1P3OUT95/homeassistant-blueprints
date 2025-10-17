@@ -1,5 +1,5 @@
 blueprint:
-  name: Global Last Brightness and Color Restore (Single Helper, Fixed)
+  name: Global Last Brightness and Color Restore (Single Helper, Fixed Indent)
   description: >
     Remembers the last brightness and color for selected lights and restores them
     when a light is turned on without explicit values. Uses one input_text helper.
@@ -33,7 +33,6 @@ action:
   - variables:
       eid: "{{ trigger.entity_id }}"
       state_obj: "{{ states[eid] }}"
-  # Only continue if it is a valid light with attributes
   - choose:
       - conditions:
           - condition: template
@@ -138,10 +137,9 @@ action:
                               brightness: "{{ b }}"
                               color_temp_kelvin: "{{ ctk }}"
                               transition: 0.3
-                  default:
-                    - service: light.turn_on
-                      target:
-                        entity_id: "{{ eid }}"
-                      data:
-                        brightness: "{{ b }}"
-                        transition: 0.3
+                  - service: light.turn_on
+                    target:
+                      entity_id: "{{ eid }}"
+                    data:
+                      brightness: "{{ b }}"
+                      transition: 0.3
