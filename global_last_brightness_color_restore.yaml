@@ -24,15 +24,11 @@ variables:
 
 trigger:
   - id: save_state
-    platform: template
-    value_template: >
-      {% set lights = states.light | selectattr('state', 'in', ['on', 'off']) | list %}
-      {{ lights | length > 0 }}
+    platform: state
+    entity_id: group.all_lights
   - id: restore_on
-    platform: template
-    value_template: >
-      {% set lights = states.light | selectattr('state', 'in', ['on', 'off']) | list %}
-      {{ lights | length > 0 }}
+    platform: state
+    entity_id: group.all_lights
 
 condition: []
 
