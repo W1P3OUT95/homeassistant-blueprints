@@ -22,7 +22,7 @@ variables:
 
 trigger:
   - platform: state
-    entity_id: !input lights_to_track
+    entity_id: group.all_lights
 
 condition: []
 
