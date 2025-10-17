@@ -33,7 +33,7 @@ action:
   - variables:
       eid: "{{ trigger.entity_id }}"
       state_obj: "{{ states[eid] }}"
-  # Only proceed if it’s a light with attributes
+  # Only continue if it is a valid light with attributes
   - choose:
       - conditions:
           - condition: template
@@ -42,7 +42,8 @@ action:
           - variables:
               state_attrs: "{{ state_obj.attributes }}"
               supported_modes: "{{ state_attrs.supported_color_modes | default([]) }}"
-              raw_data: "{{ states(!input storage_helper) | default('{}') }}"
+              input_text_helper: !input storage_helper
+              raw_data: "{{ states[input_text_helper].state | default('{}') }}"
               map_data: >
                 {% set s = raw_data if raw_data not in ['unknown','unavailable'] else '{}' %}
                 {{ s | from_json }}
